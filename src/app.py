@@ -1,16 +1,15 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import time
 import joblib
 
-# 🔥 Import ingestion layer
+# ✅ Ingestion layer
 from src.data_ingestion.mongo_client import insert_application, fetch_all_applications
 
-# Load model
+# ✅ Load trained model
 model = joblib.load("model.pkl")
 
-# Theme Colors
+# Theme
 PRIMARY_COLOR = "#2E7D32"
 ACCENT_COLOR = "#5D4037"
 
@@ -49,7 +48,7 @@ def main():
             with st.spinner("AI Model Calculating..."):
                 time.sleep(1)
 
-                # 🚨 FIX 1: Age validation
+                # ✅ Age validation
                 if age < 18:
                     st.error("Applicant must be at least 18 years old.")
                     return
@@ -58,7 +57,7 @@ def main():
                 gender_val = 0 if gender == "Male" else 1
                 employment_val = int(employment.split()[0])
 
-                # Prepare ML input
+                # Prepare input
                 input_data = pd.DataFrame([{
                     "gender": gender_val,
                     "monthly_income": income,
@@ -67,7 +66,7 @@ def main():
                     "employment_length": employment_val
                 }])
 
-                # 🚀 ML prediction (Fix 2 & 3)
+                # ✅ ML prediction
                 prediction = model.predict_proba(input_data)[0][1]
                 risk_level = "High" if prediction > 0.5 else "Low"
 
@@ -76,7 +75,7 @@ def main():
                 st.metric("Risk Probability", round(prediction, 2))
                 st.write(f"Recommended Decision: **{risk_level} Risk**")
 
-                # 🚀 FIX 4: Save using ingestion layer
+                # ✅ Save to MongoDB
                 insert_application({
                     "name": name,
                     "age": age,
@@ -99,7 +98,6 @@ def main():
 
         if data:
             df = pd.DataFrame(data)
-
             st.dataframe(df)
 
             st.markdown("### Risk Distribution")
@@ -107,6 +105,6 @@ def main():
         else:
             st.warning("No applications found.")
 
-# ------------------ RUN ------------------
+# Run
 if __name__ == '__main__':
     main()
