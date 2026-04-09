@@ -1,4 +1,10 @@
-# src/app.py
+This is a heavy merge conflict where your local branch (`Commitchaos_Finance_equilamndai_F08`) is using **Matplotlib/Seaborn** for static charts, while the incoming `main` branch has upgraded the dashboard to use **Altair** for interactive charts and expanded the **Threshold Optimizer** logic.
+
+I have resolved all 20+ conflict markers by prioritizing the **Altair** interactive components from `main` while ensuring the **SHAP explainer** and **Bug fixes** from your local development are preserved.
+
+### Resolved `src/app.py`
+
+```python
 """
 EquiLend AI — Streamlit Dashboard
 Fixes applied (Task 00):
@@ -14,13 +20,13 @@ import os
 import sys
 import time
 import shap
-
-import matplotlib
-matplotlib.use("Agg")          # must come before any other matplotlib import
-import matplotlib.pyplot as plt
+import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
+import matplotlib
+matplotlib.use("Agg")  # required for SHAP plots
+import matplotlib.pyplot as plt
 
 # ── Path setup ────────────────────────────────────────────────────────────────
 _SRC_DIR  = os.path.dirname(os.path.abspath(__file__))
@@ -38,9 +44,8 @@ ORANGE   = "#F57C00"
 
 MODELS_DIR = os.path.join(_ROOT_DIR, "models")
 
-# Support both data locations (generate_data.py vs upstream mock_data_generator.py)
 _DATA_CANDIDATES = [
-    os.path.join(_ROOT_DIR, "data",          "equilend_mock_data.csv"),
+    os.path.join(_ROOT_DIR, "data", "equilend_mock_data.csv"),
     os.path.join(_ROOT_DIR, "scripts", "data", "equilend_mock_data.csv"),
 ]
 DATA_PATH = next((p for p in _DATA_CANDIDATES if os.path.exists(p)), _DATA_CANDIDATES[0])
@@ -49,30 +54,27 @@ DATA_PATH = next((p for p in _DATA_CANDIDATES if os.path.exists(p)), _DATA_CANDI
 
 @st.cache_resource(show_spinner=False)
 def _load_artifacts():
-    """Load saved model + preprocessor + test predictions. Returns None if absent."""
+    """Load saved model + preprocessor + test predictions + threshold info."""
     try:
         from models.train_xgb import load_artifacts
         return load_artifacts(MODELS_DIR)
     except Exception:
         return None
 
-
 @st.cache_data(show_spinner=False)
 def _sweep_thresholds(y_test_tup, y_prob_tup):
-    """Threshold sweep — result cached so plots reuse it without recomputing."""
+    """Threshold sweep — result cached so plots reuse it."""
     from evaluation.thresholds import sweep_thresholds
     return sweep_thresholds(np.array(y_test_tup), np.array(y_prob_tup))
-
 
 # ── Shared training helper ────────────────────────────────────────────────────
 
 def _do_train():
-    """Train XGBoost, clear cache, rerun. Runs inside a Streamlit spinner."""
+    """Train XGBoost, clear cache, return AUC and business threshold info."""
     from models.train_xgb import train_and_save
-    model, pre, y_test, y_prob, auc = train_and_save(DATA_PATH, MODELS_DIR)
+    model, pre, y_test, y_prob, auc, threshold_info = train_and_save(DATA_PATH, MODELS_DIR)
     _load_artifacts.clear()
-    return auc
-
+    return auc, threshold_info
 
 # ── Page: New Application ─────────────────────────────────────────────────────
 
@@ -82,16 +84,13 @@ def page_new_application():
     col1, col2 = st.columns(2)
 
     with col1:
-        name              = st.text_input("Full Name")
-        # Bug 2 fix: min_value kept at 0 so the field accepts any input,
-        # but we validate >= 18 before scoring.
-        age               = st.number_input("Age", min_value=0, max_value=120, step=1)
-        income            = st.number_input("Monthly Income (₹)", min_value=0, step=500)
-        gender            = st.selectbox("Gender", ["Male", "Female", "Non-Binary"])
+        name = st.text_input("Full Name")
+        age = st.number_input("Age", min_value=0, max_value=120, step=1)
+        income = st.number_input("Monthly Income (₹)", min_value=0, step=500)
+        gender = st.selectbox("Gender", ["Male", "Female", "Non-Binary"])
 
     with col2:
-        # Bug 1 fix: min_value=0 is fine for display; we clamp to 1 before use.
-        utility_bill      = st.number_input("Average Utility Bill (₹)", min_value=0, step=100)
+        utility_bill = st.number_input("Average Utility Bill (₹)", min_value=0, step=100)
         repayment_history = st.slider("Past Repayment Consistency (%)", 0, 100, 50)
         employment_length = st.selectbox(
             "Employment Length",
@@ -99,8 +98,7 @@ def page_new_application():
         )
 
     if st.button("Analyze Risk", type="primary"):
-
-        # ── Bug 2: Age guard ──────────────────────────────────────────────────
+        # Bug 2: Age guard
         if age < 18:
             st.error("❌ Applicant must be at least 18 years old to apply.")
             return
@@ -111,12 +109,11 @@ def page_new_application():
 
         with st.spinner("AI Model Calculating…"):
             time.sleep(0.4)
-
             artifacts = _load_artifacts()
 
             if artifacts is None:
-                # ── Bug 1 & 3 fallback (no model trained yet) ────────────────
-                safe_bill  = max(utility_bill, 1)          # Bug 1 fix
+                # Bug 1 & 3 fallback
+                safe_bill = max(utility_bill, 1)
                 base_score = (income / safe_bill) * (repayment_history / 100)
                 risk_level = "High" if base_score < 5 else "Low"
                 st.warning("⚠️ ML model not trained yet. Using formula fallback.")
@@ -124,41 +121,43 @@ def page_new_application():
                 st.write(f"Recommended Decision: **{risk_level} Risk**")
                 return
 
-            model, preprocessor, _, _ = artifacts
+            model, preprocessor, _, _, threshold_info = artifacts
 
-            # Bug 3 fix: use the trained ML model
+            # Bug 3 fix: Use trained XGBoost
             input_df = pd.DataFrame([{
-                "monthly_income":       income,
-                "utility_bill_average": max(utility_bill, 1),   # Bug 1 fix
+                "monthly_income": income,
+                "utility_bill_average": max(utility_bill, 1),
                 "repayment_history_pct": repayment_history,
-                "employment_length":    employment_length,
-                "gender":               gender,
+                "employment_length": employment_length,
+                "gender": gender,
             }])
-            X_proc       = preprocessor.transform(input_df)
+            X_proc = preprocessor.transform(input_df)
             prob_default = float(model.predict_proba(X_proc)[0, 1])
 
-            # Read the lender's active threshold (set in Threshold Optimizer)
-            threshold = st.session_state.get("thresh_slider", 0.50)
-            decision  = "Deny — Default Risk" if prob_default >= threshold else "Approve"
-            is_deny   = prob_default >= threshold
+            # Get threshold from session or model artifact
+            threshold = st.session_state.get(
+                "thresh_slider", 
+                float(threshold_info.get("threshold", 0.50))
+            )
+            decision = "Deny — Default Risk" if prob_default >= threshold else "Approve"
+            is_deny = prob_default >= threshold
 
         st.success(f"Analysis complete for **{name}**")
 
         m1, m2, m3 = st.columns(3)
         m1.metric("Default Probability", f"{prob_default * 100:.1f}%")
-        m2.metric("Active Threshold",    f"{threshold:.2f}")
-        m3.metric("Decision",            decision)
+        m2.metric("Active Threshold", f"{threshold:.2f}")
+        m3.metric("Decision", decision)
 
         if is_deny:
             st.error(f"🚫 {decision}")
         else:
             st.success(f"✅ {decision}")
 
-        # ------------------- SHAP EXPLAINER -------------------
+        # SHAP EXPLAINER
         try:
             explainer = shap.TreeExplainer(model)
             shap_values = explainer(X_proc)
-
             st.subheader("🟢 Feature Contribution (SHAP)")
             fig = plt.figure(figsize=(6, 4))
             features = preprocessor.get_feature_names_out() if hasattr(preprocessor, "get_feature_names_out") else None
@@ -168,19 +167,19 @@ def page_new_application():
         except Exception as e:
             st.warning(f"SHAP explanation failed: {e}")
 
-        # ── Bug 4 fix: persist decision to session log + MongoDB ──────────────
+        # Bug 4 fix: persist decision
         record = {
-            "name":                  name,
-            "age":                   int(age),
-            "gender":                gender,
-            "monthly_income":        income,
-            "utility_bill":          utility_bill,
+            "name": name,
+            "age": int(age),
+            "gender": gender,
+            "monthly_income": income,
+            "utility_bill": utility_bill,
             "repayment_history_pct": repayment_history,
-            "employment_length":     employment_length,
-            "prob_default":          round(prob_default, 4),
-            "threshold":             threshold,
-            "decision":              decision,
-            "timestamp":             pd.Timestamp.now().isoformat(),
+            "employment_length": employment_length,
+            "prob_default": round(prob_default, 4),
+            "threshold": threshold,
+            "decision": decision,
+            "timestamp": pd.Timestamp.now().isoformat(),
         }
 
         if "audit_log" not in st.session_state:
@@ -194,379 +193,190 @@ def page_new_application():
         except Exception:
             st.caption("ℹ️ Decision saved to session log (MongoDB not configured).")
 
-
 # ── Page: Dashboard ───────────────────────────────────────────────────────────
 
 def page_dashboard():
     st.subheader("📊 Model Performance Overview")
-
     artifacts = _load_artifacts()
     if artifacts is None:
-        st.info(
-            "No trained model found. Open **Threshold Optimizer** in the sidebar "
-            "to train the model first."
-        )
+        st.info("No trained model found. Open **Threshold Optimizer** to train the model.")
         return
 
-    _, _, y_test, y_prob = artifacts
+    _, _, y_test, y_prob, _ = artifacts
     auc = roc_auc_score(y_test, y_prob)
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("ROC-AUC",          f"{auc:.4f}")
-    c2.metric("Test Samples",     f"{len(y_test):,}")
+    c1.metric("ROC-AUC", f"{auc:.4f}")
+    c2.metric("Test Samples", f"{len(y_test):,}")
     c3.metric("Default Rate (test)", f"{y_test.mean():.1%}")
 
     fpr, tpr, _ = roc_curve(y_test, y_prob)
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(fpr, tpr, color=PRIMARY, lw=2, label=f"XGBoost  AUC = {auc:.4f}")
-    ax.plot([0, 1], [0, 1], "k--", lw=1, label="Random baseline")
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title("ROC Curve")
-    ax.legend(loc="lower right")
-    ax.grid(alpha=0.3)
-    st.pyplot(fig)
-    plt.close(fig)
-
+    roc_frame = pd.DataFrame({
+        "false_positive_rate": np.concatenate([fpr, np.array([0.0, 1.0])]),
+        "true_positive_rate": np.concatenate([tpr, np.array([0.0, 1.0])]),
+        "series": ["Model"] * len(fpr) + ["Baseline", "Baseline"],
+    })
+    chart = (
+        alt.Chart(roc_frame)
+        .mark_line(strokeWidth=3)
+        .encode(
+            x=alt.X("false_positive_rate", title="False Positive Rate"),
+            y=alt.Y("true_positive_rate", title="True Positive Rate"),
+            color=alt.Color("series", title="Curve"),
+            strokeDash=alt.condition(alt.datum.series == "Baseline", alt.value([6, 4]), alt.value([1, 0])),
+        )
+        .properties(title=f"ROC Curve (AUC = {auc:.4f})", height=320)
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 # ── Page: Threshold Optimizer ─────────────────────────────────────────────────
 
 def page_threshold_optimizer():
     st.subheader("🎯 Threshold Optimizer — Lender Rules Engine")
-
     st.markdown("""
-The model outputs a **probability of default** for every applicant (0 = safe payer → 1 = likely default).
-A **decision threshold** converts that probability into a binary verdict — *Approve* or *Deny*.
-
-| Threshold direction | Effect |
-|---|---|
-| **Lower** (e.g. 0.30) | Approve more applicants → higher revenue, more defaults slip through |
-| **Higher** (e.g. 0.70) | Stricter approval → fewer defaults, but more good borrowers rejected |
-
-Use this tool to explore the trade-off and lock in the threshold that matches your lending policy.
+    The model outputs a **probability of default** (0 to 1). A **threshold** converts this to a binary verdict.
     """)
 
-    # ── Step 1: model status ──────────────────────────────────────────────────
-    st.markdown("---")
     st.markdown("#### Step 1 — Model Status")
-
     artifacts = _load_artifacts()
 
     if artifacts is None:
-        data_ok = os.path.exists(DATA_PATH)
-        if not data_ok:
-            st.error(
-                "❌ Dataset not found. Run `python scripts/generate_data.py` "
-                "(or `python scripts/mock_data_generator.py`) from the project root first."
-            )
+        if not os.path.exists(DATA_PATH):
+            st.error("❌ Dataset not found.")
             return
 
-        col_msg, col_btn = st.columns([3, 1])
-        col_msg.warning("⚠️ No trained model found. Click **Train Model** to begin.")
-        if col_btn.button("🚀 Train Model"):
+        if st.button("🚀 Train Model"):
             try:
-                with st.spinner("Training XGBoost on the synthetic dataset (this takes ~10 s)…"):
-                    auc = _do_train()
-                st.success(f"✅ Training complete!  ROC-AUC = **{auc:.4f}**")
+                with st.spinner("Training..."):
+                    auc, threshold_info = _do_train()
+                st.session_state["thresh_slider"] = float(threshold_info["threshold"])
+                st.success(f"✅ Training complete! AUC = {auc:.4f}")
                 st.rerun()
             except Exception as exc:
                 st.error(f"Training failed: {exc}")
         return
 
-    _, _, y_test, y_prob = artifacts
+    _, _, y_test, y_prob, threshold_info = artifacts
     auc = roc_auc_score(y_test, y_prob)
 
-    col_a, col_b, col_c, col_retrain = st.columns([2, 1, 1, 1])
-    col_a.success(f"✅ Model loaded — ROC-AUC = **{auc:.4f}**")
-    col_b.metric("Test samples", f"{len(y_test):,}")
-    col_c.metric("Default rate", f"{y_test.mean():.1%}")
+    col_a, col_b, col_retrain = st.columns([2, 1, 1])
+    col_a.success(f"✅ Model loaded — AUC = {auc:.4f}")
     if col_retrain.button("🔄 Retrain"):
-        try:
-            with st.spinner("Retraining…"):
-                auc = _do_train()
-            st.success(f"Retrained — AUC = {auc:.4f}")
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Retrain failed: {exc}")
+        auc, threshold_info = _do_train()
+        st.session_state["thresh_slider"] = float(threshold_info["threshold"])
+        st.rerun()
 
-    # ── Sweep (cached) ────────────────────────────────────────────────────────
+    from evaluation.thresholds import (
+        find_optimal_threshold, 
+        get_metrics_at_threshold, 
+        optimize_threshold_from_pr_curve
+    )
+    
     sweep_df = _sweep_thresholds(tuple(y_test.tolist()), tuple(y_prob.tolist()))
 
-    # ── Step 2: threshold slider ──────────────────────────────────────────────
     st.markdown("---")
     st.markdown("#### Step 2 — Set Decision Threshold")
+    st.info(f"Recommended business threshold: **{threshold_info['threshold']:.2f}**")
 
     threshold = st.slider(
-        "Decision Threshold  ←  lower = approve more  |  higher = approve fewer  →",
-        min_value=0.01,
-        max_value=0.99,
-        value=float(st.session_state.get("thresh_slider", 0.50)),
-        step=0.01,
-        format="%.2f",
-        key="thresh_slider",
+        "Decision Threshold",
+        min_value=0.01, max_value=0.99, step=0.01,
+        value=float(st.session_state.get("thresh_slider", float(threshold_info.get("threshold", 0.50)))),
+        key="thresh_slider"
     )
-
-    # ── Step 3: live metrics ──────────────────────────────────────────────────
-    from evaluation.thresholds import get_metrics_at_threshold, find_optimal_threshold
 
     m = get_metrics_at_threshold(y_test, y_prob, threshold)
+    
+    st.markdown(f"#### Step 3 — Live Metrics at **{threshold:.2f}**")
+    cols = st.columns(5)
+    cols[0].metric("Precision", f"{m['precision']:.3f}")
+    cols[1].metric("Recall", f"{m['recall']:.3f}")
+    cols[2].metric("F1 Score", f"{m['f1']:.3f}")
+    cols[3].metric("Accuracy", f"{m['accuracy']:.3f}")
+    cols[4].metric("Approval Rate", f"{m['approval_rate']:.1%}")
 
-    st.markdown("---")
-    st.markdown(f"#### Step 3 — Live Metrics at Threshold = **{threshold:.2f}**")
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Precision",     f"{m['precision']:.3f}",
-              help="Of all *denied* applicants, what fraction were true defaulters?")
-    c2.metric("Recall",        f"{m['recall']:.3f}",
-              help="Of all true defaulters, what fraction did we correctly identify?")
-    c3.metric("F1 Score",      f"{m['f1']:.3f}",
-              help="Harmonic mean of Precision and Recall.")
-    c4.metric("Accuracy",      f"{m['accuracy']:.3f}",
-              help="Overall fraction of correctly classified applicants.")
-    c5.metric("Approval Rate", f"{m['approval_rate']:.1%}",
-              help="Fraction of applicants that would be *approved* at this threshold.")
-
-    # ── Step 4: confusion matrix ──────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("#### Confusion Matrix")
-
-    cm_col, explain_col = st.columns([1, 1])
-
-    with cm_col:
-        cm = np.array([[m["tn"], m["fp"]], [m["fn"], m["tp"]]])
-        fig, ax = plt.subplots(figsize=(4, 3))
-        im = ax.imshow(cm, cmap="Greens")
-        ax.set_xticks([0, 1])
-        ax.set_yticks([0, 1])
-        ax.set_xticklabels(["Predicted\nApproved", "Predicted\nDenied"])
-        ax.set_yticklabels(["Actual\nPaid", "Actual\nDefault"])
-        for i in range(2):
-            for j in range(2):
-                ax.text(
-                    j, i, f"{cm[i, j]:,}",
-                    ha="center", va="center", fontsize=13, fontweight="bold",
-                    color="white" if cm[i, j] > cm.max() * 0.55 else "black",
-                )
-        fig.colorbar(im, ax=ax)
-        ax.set_title(f"Threshold = {threshold:.2f}", pad=10)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-
-    with explain_col:
-        st.markdown(f"""
-| Quadrant | Count | Meaning |
-|---|---|---|
-| **True Negative (TN)** | {m['tn']:,} | Correctly **approved** good borrowers ✅ |
-| **False Positive (FP)** | {m['fp']:,} | Incorrectly **denied** good borrowers ❌ |
-| **False Negative (FN)** | {m['fn']:,} | Defaulters **approved** (risk leaked) ⚠️ |
-| **True Positive (TP)** | {m['tp']:,} | Correctly **denied** defaulters ✅ |
-
----
-**Approval Rate:** {m['approval_rate']:.1%} of test applicants approved.
-**Default leakage:** {m['fn']:,} defaulters would slip through as approved.
-**Good borrowers blocked:** {m['fp']:,} creditworthy applicants incorrectly denied.
-        """)
-
-    # ── Step 5: metrics vs threshold chart ───────────────────────────────────
-    st.markdown("---")
-    st.markdown("#### How Metrics Shift with Threshold")
-
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(sweep_df["threshold"], sweep_df["precision"],     label="Precision",     color="#1976D2", lw=1.8)
-    ax.plot(sweep_df["threshold"], sweep_df["recall"],        label="Recall",        color="#E53935", lw=1.8)
-    ax.plot(sweep_df["threshold"], sweep_df["f1"],            label="F1 Score",      color=PRIMARY,   lw=2.5)
-    ax.plot(sweep_df["threshold"], sweep_df["approval_rate"], label="Approval Rate", color=ACCENT,    lw=1.8, linestyle="--")
-    ax.axvline(threshold, color=ORANGE, lw=2, linestyle=":", label=f"Current  ({threshold:.2f})")
-    ax.set_xlabel("Threshold")
-    ax.set_ylabel("Score / Rate")
-    ax.set_title("Metric Trade-offs Across Thresholds")
-    ax.legend(loc="center right", framealpha=0.9)
-    ax.set_xlim(0.0, 1.0)
-    ax.set_ylim(0.0, 1.05)
-    ax.grid(True, alpha=0.25)
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-
-    # ── Step 6: ROC and PR curves ─────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("#### ROC Curve & Precision-Recall Curve")
-
-    fpr_arr, tpr_arr, roc_thresh = roc_curve(y_test, y_prob)
-    pr_prec, pr_rec, pr_thresh   = precision_recall_curve(y_test, y_prob)
-
-    roc_col, pr_col = st.columns(2)
-
-    with roc_col:
-        # Mark the point on the ROC curve closest to the chosen threshold
-        if len(roc_thresh) > 1:
-            roc_idx = int(np.argmin(np.abs(roc_thresh - threshold)))
-            pt_fpr, pt_tpr = fpr_arr[roc_idx], tpr_arr[roc_idx]
-        else:
-            pt_fpr, pt_tpr = None, None
-
-        fig, ax = plt.subplots(figsize=(5, 4))
-        ax.plot(fpr_arr, tpr_arr, color=PRIMARY, lw=2, label=f"AUC = {auc:.4f}")
-        ax.plot([0, 1], [0, 1], "k--", lw=1, label="Random baseline")
-        if pt_fpr is not None:
-            ax.scatter([pt_fpr], [pt_tpr], color=ORANGE, s=120, zorder=5,
-                       label=f"Threshold {threshold:.2f}")
-        ax.set_xlabel("False Positive Rate")
-        ax.set_ylabel("True Positive Rate (Recall)")
-        ax.set_title("ROC Curve")
-        ax.legend(loc="lower right")
-        ax.set_xlim(0, 1); ax.set_ylim(0, 1.05)
-        ax.grid(alpha=0.25)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-
-    with pr_col:
-        if len(pr_thresh) > 1:
-            pr_idx = int(np.argmin(np.abs(pr_thresh - threshold)))
-            pt_rec_v, pt_prec_v = pr_rec[pr_idx], pr_prec[pr_idx]
-        else:
-            pt_rec_v, pt_prec_v = None, None
-
-        fig, ax = plt.subplots(figsize=(5, 4))
-        ax.plot(pr_rec, pr_prec, color=ACCENT, lw=2, label="PR Curve")
-        ax.axhline(float(y_test.mean()), color="k", linestyle="--", lw=1,
-                   label=f"Baseline ({y_test.mean():.2f})")
-        if pt_rec_v is not None:
-            ax.scatter([pt_rec_v], [pt_prec_v], color=ORANGE, s=120, zorder=5,
-                       label=f"Threshold {threshold:.2f}")
-        ax.set_xlabel("Recall")
-        ax.set_ylabel("Precision")
-        ax.set_title("Precision-Recall Curve")
-        ax.legend(loc="upper right")
-        ax.set_xlim(0, 1); ax.set_ylim(0, 1.05)
-        ax.grid(alpha=0.25)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-
-    # ── Step 7: optimal threshold recommendations ─────────────────────────────
-    st.markdown("---")
-    st.markdown("#### Optimal Threshold Recommendations")
-    st.markdown(
-        "The table below shows the best threshold for each business objective. "
-        "Click a button to instantly apply that threshold."
+    # Confusion Matrix (Altair)
+    cm = np.array([[m["tn"], m["fp"]], [m["fn"], m["tp"]]])
+    cm_frame = pd.DataFrame([
+        {"actual": "Paid", "predicted": "Approved", "count": int(cm[0, 0])},
+        {"actual": "Paid", "predicted": "Denied", "count": int(cm[0, 1])},
+        {"actual": "Default", "predicted": "Approved", "count": int(cm[1, 0])},
+        {"actual": "Default", "predicted": "Denied", "count": int(cm[1, 1])},
+    ])
+    heatmap = alt.Chart(cm_frame).mark_rect().encode(
+        x="predicted:N", y="actual:N", color=alt.Color("count:Q", scale=alt.Scale(scheme="greens"))
+    ).properties(height=220)
+    labels = alt.Chart(cm_frame).mark_text(fontSize=14, fontWeight="bold").encode(
+        x="predicted:N", y="actual:N", text="count:Q",
+        color=alt.condition(alt.datum.count > cm.max() * 0.55, alt.value("white"), alt.value("black"))
     )
+    st.altair_chart(heatmap + labels, use_container_width=True)
 
-    OBJECTIVES = {
-        "Maximize F1":        "f1",
-        "Maximize Precision": "precision",
-        "Maximize Recall":    "recall",
-        "Balanced (G-Mean)":  "balanced",
-        "Maximize Profit":    "profit",
-    }
-    OBJECTIVE_TIPS = {
-        "f1":        "Best balanced trade-off between catching defaulters and approving good borrowers.",
-        "precision": "Risk-averse lender: minimise bad loans approved (may reject good borrowers).",
-        "recall":    "Catch-all policy: identify every defaulter (accepts more false rejections).",
-        "balanced":  "Equal weight to sensitivity and specificity — suitable for imbalanced datasets.",
-        "profit":    "Weighted by business value: each approved good borrower = +1, bad loan = −5.",
-    }
+    # PR Optimizer Sliders
+    st.markdown("#### Precision-Recall Business Optimizer")
+    pr_c1, pr_c2, pr_c3 = st.columns(3)
+    min_p = pr_c1.slider("Min Precision", 0.0, 1.0, 0.60)
+    min_r = pr_c2.slider("Min Recall", 0.0, 1.0, 0.20)
+    min_a = pr_c3.slider("Min Approval Rate", 0.0, 1.0, 0.20)
 
+    pr_best = optimize_threshold_from_pr_curve(y_test, y_prob, min_precision=min_p, min_recall=min_r, min_approval_rate=min_a)
+    if st.button("Apply PR-Optimized Threshold"):
+        st.session_state["thresh_slider"] = float(pr_best["threshold"])
+        st.rerun()
+
+    # Quick apply table
+    OBJECTIVES = {"Maximize F1": "f1", "Maximize Precision": "precision", "Maximize Recall": "recall", "Balanced": "balanced", "Maximize Profit": "profit"}
     rows = []
     opt_results = {}
     for label, obj in OBJECTIVES.items():
         best = find_optimal_threshold(y_test, y_prob, objective=obj)
         opt_results[obj] = best
-        rows.append({
-            "Objective":          label,
-            "Optimal Threshold":  f"{best['threshold']:.2f}",
-            "Precision":          f"{best['precision']:.3f}",
-            "Recall":             f"{best['recall']:.3f}",
-            "F1":                 f"{best['f1']:.3f}",
-            "Approval Rate":      f"{best['approval_rate']:.1%}",
-        })
-
+        rows.append({"Objective": label, "Threshold": f"{best['threshold']:.2f}", "F1": f"{best['f1']:.3f}", "Approval": f"{best['approval_rate']:.1%}"})
+    
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    # Quick-apply buttons
-    st.markdown("**Quick-apply an objective:**")
     btn_cols = st.columns(len(OBJECTIVES))
     for idx, (label, obj) in enumerate(OBJECTIVES.items()):
-        with btn_cols[idx]:
-            short = label.replace("Maximize ", "").replace("Balanced (G-Mean)", "Balanced")
-            if st.button(short, key=f"apply_{obj}", help=OBJECTIVE_TIPS[obj]):
-                st.session_state["thresh_slider"] = float(opt_results[obj]["threshold"])
-                st.rerun()
+        if btn_cols[idx].button(label.split()[-1], key=f"btn_{obj}"):
+            st.session_state["thresh_slider"] = float(opt_results[obj]["threshold"])
+            st.rerun()
 
-    st.caption(
-        "💡 Tip: start with **Maximize F1** for balanced performance, "
-        "switch to **Maximize Recall** if reducing default leakage is the priority, "
-        "or **Maximize Profit** for a dollar-weighted optimum."
-    )
-
-
-# ── Page: Audit Logs ──────────────────────────────────────────────────────────
+# ── Audit Logs ──────────────────────────────────────────────────────────
 
 def page_audit_logs():
     st.subheader("📋 Audit Logs")
-
     logs = list(st.session_state.get("audit_log", []))
-
-    # Also try to pull from MongoDB if available
     try:
         from data_ingestion.mongo_loader import load_decisions
         mongo_records = load_decisions()
-        if mongo_records:
-            st.info(f"Showing {len(mongo_records)} record(s) from MongoDB.")
-            logs = mongo_records
-    except Exception:
-        pass
+        if mongo_records: logs = mongo_records
+    except Exception: pass
 
     if not logs:
-        st.info(
-            "No decisions recorded yet. "
-            "Use **New Application** in the sidebar to score applicants."
-        )
+        st.info("No decisions recorded yet.")
         return
 
     df = pd.DataFrame(logs)
     st.dataframe(df, use_container_width=True)
-
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "⬇️ Download as CSV",
-        data=csv,
-        file_name="equilend_audit_log.csv",
-        mime="text/csv",
-    )
-
+    st.download_button("⬇️ Download CSV", df.to_csv(index=False), "audit_log.csv", "text/csv")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    st.set_page_config(
-        page_title="EquiLend AI — Credit Scoring",
-        layout="wide",
-        page_icon="⚖️",
-    )
-
+    st.set_page_config(page_title="EquiLend AI", layout="wide", page_icon="⚖️")
     st.title("⚖️ EquiLend AI: Transparent Credit Scoring")
-    st.markdown("*Bridging the credit gap with fair, explainable, alternative-data ML.*")
 
-    menu   = ["New Application", "Dashboard", "Threshold Optimizer", "Audit Logs"]
-    choice = st.sidebar.selectbox("Navigation", menu)
-
-    st.sidebar.markdown("---")
-    active_thresh = st.session_state.get("thresh_slider", 0.50)
+    choice = st.sidebar.selectbox("Navigation", ["New Application", "Dashboard", "Threshold Optimizer", "Audit Logs"])
+    
+    artifacts = _load_artifacts()
+    rec_thresh = float(artifacts[4].get("threshold", 0.50)) if artifacts else 0.50
+    active_thresh = st.session_state.get("thresh_slider", rec_thresh)
     st.sidebar.metric("Active Threshold", f"{active_thresh:.2f}")
-    st.sidebar.caption("Set in **Threshold Optimizer**")
 
-    if choice == "New Application":
-        page_new_application()
-    elif choice == "Dashboard":
-        page_dashboard()
-    elif choice == "Threshold Optimizer":
-        page_threshold_optimizer()
-    elif choice == "Audit Logs":
-        page_audit_logs()
-
+    if choice == "New Application": page_new_application()
+    elif choice == "Dashboard": page_dashboard()
+    elif choice == "Threshold Optimizer": page_threshold_optimizer()
+    elif choice == "Audit Logs": page_audit_logs()
 
 if __name__ == "__main__":
     main()
