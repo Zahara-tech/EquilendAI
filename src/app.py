@@ -2,55 +2,111 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import time
+import joblib
 
-# Earthy / Professional Theme Colors
-PRIMARY_COLOR = "#2E7D32" # Forest Green
-ACCENT_COLOR = "#5D4037"  # Soil Brown
+# 🔥 Import ingestion layer
+from src.data_ingestion.mongo_client import insert_application, fetch_all_applications
+
+# Load model
+model = joblib.load("model.pkl")
+
+# Theme Colors
+PRIMARY_COLOR = "#2E7D32"
+ACCENT_COLOR = "#5D4037"
 
 def main():
     st.set_page_config(page_title="EquiLend AI - Credit Scoring", layout="wide")
-    
-    st.title("⚖️ EquiLend AI: Transparent Credit Scoring")
-    st.markdown("### Assessing creditworthiness through alternative data.")
 
-    # Sidebar for Navigation
-    menu = ["New Application", "Dashboard", "Audit Logs"]
+    st.title("⚖️ EquiLend AI: Transparent Credit Scoring")
+    st.markdown("### AI-powered credit risk assessment using ML")
+
+    # Sidebar
+    menu = ["New Application", "Dashboard"]
     choice = st.sidebar.selectbox("Navigation", menu)
 
+    # ------------------ NEW APPLICATION ------------------
     if choice == "New Application":
-        st.subheader("Manual Loan Application")
-        
+        st.subheader("📄 Manual Loan Application")
+
         col1, col2 = st.columns(2)
-        
+
         with col1:
             name = st.text_input("Full Name")
             age = st.number_input("Age", min_value=0, max_value=120)
             income = st.number_input("Monthly Income (₹)", min_value=0)
-        
+
+            gender = st.selectbox("Gender", ["Male", "Female"])
+            employment = st.selectbox(
+                "Employment Length",
+                ["1 year", "2 years", "3 years", "5 years", "10 years"]
+            )
+
         with col2:
             utility_bill = st.number_input("Average Utility Bill (₹)", min_value=0)
-            repayment_history = st.slider("Past Repayment Consistency (%)", 0, 100, 50)
+            repayment_history = st.slider("Repayment Consistency (%)", 0, 100, 50)
 
         if st.button("Analyze Risk"):
-            # LOGICAL ERRORS 1, 2, and 3 are hidden in this block
-            with st.spinner('AI Model Calculating...'):
-                time.sleep(1) # Simulate processing
-                
-                # Placeholder Score Logic
-                base_score = (income / (utility_bill + 1)) * (repayment_history / 100)
-                risk_level = "High" if base_score < 5 else "Low"
-                
+            with st.spinner("AI Model Calculating..."):
+                time.sleep(1)
+
+                # 🚨 FIX 1: Age validation
+                if age < 18:
+                    st.error("Applicant must be at least 18 years old.")
+                    return
+
+                # Convert inputs
+                gender_val = 0 if gender == "Male" else 1
+                employment_val = int(employment.split()[0])
+
+                # Prepare ML input
+                input_data = pd.DataFrame([{
+                    "gender": gender_val,
+                    "monthly_income": income,
+                    "utility_bill_average": utility_bill,
+                    "repayment_history_pct": repayment_history,
+                    "employment_length": employment_val
+                }])
+
+                # 🚀 ML prediction (Fix 2 & 3)
+                prediction = model.predict_proba(input_data)[0][1]
+                risk_level = "High" if prediction > 0.5 else "Low"
+
+                # Output
                 st.success(f"Analysis Complete for {name}")
-                st.metric(label="Calculated Risk Score", value=round(base_score, 2))
+                st.metric("Risk Probability", round(prediction, 2))
                 st.write(f"Recommended Decision: **{risk_level} Risk**")
-                
-                # LOGICAL ERROR 4: Data is not saved anywhere yet
 
+                # 🚀 FIX 4: Save using ingestion layer
+                insert_application({
+                    "name": name,
+                    "age": age,
+                    "income": income,
+                    "gender": gender,
+                    "employment_length": employment_val,
+                    "utility_bill": utility_bill,
+                    "repayment_history": repayment_history,
+                    "risk_probability": float(prediction),
+                    "risk_level": risk_level
+                })
+
+                st.info("Application saved successfully!")
+
+    # ------------------ DASHBOARD ------------------
     elif choice == "Dashboard":
-        st.subheader("Lender Rules Engine Overview")
-        # Placeholder for visual charts
-        chart_data = pd.DataFrame(np.random.randn(20, 3), columns=['Approved', 'Rejected', 'Pending'])
-        st.line_chart(chart_data)
+        st.subheader("📊 Applications Dashboard")
 
+        data = fetch_all_applications()
+
+        if data:
+            df = pd.DataFrame(data)
+
+            st.dataframe(df)
+
+            st.markdown("### Risk Distribution")
+            st.bar_chart(df["risk_level"].value_counts())
+        else:
+            st.warning("No applications found.")
+
+# ------------------ RUN ------------------
 if __name__ == '__main__':
     main()
