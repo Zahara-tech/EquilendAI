@@ -1,6 +1,7 @@
-This is a heavy merge conflict where your local branch (`Commitchaos_Finance_equilamndai_F08`) is using **Matplotlib/Seaborn** for static charts, while the incoming `main` branch has upgraded the dashboard to use **Altair** for interactive charts and expanded the **Threshold Optimizer** logic.
-
-I have resolved all 20+ conflict markers by prioritizing the **Altair** interactive components from `main` while ensuring the **SHAP explainer** and **Bug fixes** from your local development are preserved.
+The conflict you've provided is quite messy because it contains nested merge markers and duplicated sections from the previous conflict resolution. I have cleaned up the `src/app.py` file to ensure:
+1.  **Imports are clean**: All necessary libraries (`altair`, `shap`, `matplotlib`, etc.) are included.
+2.  **Logic is unified**: The interactive **Altair** charts from the `main` branch are prioritized, but the **SHAP explainer** and **Bug fixes** from your branch are kept.
+3.  **Threshold Artifacts**: The logic for handling `threshold_info` (which was a major source of the conflict) is now consistent throughout the file.
 
 ### Resolved `src/app.py`
 
@@ -25,7 +26,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib
-matplotlib.use("Agg")  # required for SHAP plots
+matplotlib.use("Agg")  # Must come before any other matplotlib import
 import matplotlib.pyplot as plt
 
 # ── Path setup ────────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ ORANGE   = "#F57C00"
 
 MODELS_DIR = os.path.join(_ROOT_DIR, "models")
 
+# Support both data locations
 _DATA_CANDIDATES = [
     os.path.join(_ROOT_DIR, "data", "equilend_mock_data.csv"),
     os.path.join(_ROOT_DIR, "scripts", "data", "equilend_mock_data.csv"),
@@ -63,14 +65,14 @@ def _load_artifacts():
 
 @st.cache_data(show_spinner=False)
 def _sweep_thresholds(y_test_tup, y_prob_tup):
-    """Threshold sweep — result cached so plots reuse it."""
+    """Threshold sweep — result cached so plots reuse it without recomputing."""
     from evaluation.thresholds import sweep_thresholds
     return sweep_thresholds(np.array(y_test_tup), np.array(y_prob_tup))
 
 # ── Shared training helper ────────────────────────────────────────────────────
 
 def _do_train():
-    """Train XGBoost, clear cache, return AUC and business threshold info."""
+    """Train XGBoost, clear cache, rerun. Returns AUC and business threshold info."""
     from models.train_xgb import train_and_save
     model, pre, y_test, y_prob, auc, threshold_info = train_and_save(DATA_PATH, MODELS_DIR)
     _load_artifacts.clear()
@@ -98,7 +100,7 @@ def page_new_application():
         )
 
     if st.button("Analyze Risk", type="primary"):
-        # Bug 2: Age guard
+        # Bug 2 fix: Age guard
         if age < 18:
             st.error("❌ Applicant must be at least 18 years old to apply.")
             return
@@ -123,10 +125,10 @@ def page_new_application():
 
             model, preprocessor, _, _, threshold_info = artifacts
 
-            # Bug 3 fix: Use trained XGBoost
+            # Bug 3 fix: use the trained ML model
             input_df = pd.DataFrame([{
                 "monthly_income": income,
-                "utility_bill_average": max(utility_bill, 1),
+                "utility_bill_average": max(utility_bill, 1), # Bug 1 fix
                 "repayment_history_pct": repayment_history,
                 "employment_length": employment_length,
                 "gender": gender,
@@ -134,10 +136,9 @@ def page_new_application():
             X_proc = preprocessor.transform(input_df)
             prob_default = float(model.predict_proba(X_proc)[0, 1])
 
-            # Get threshold from session or model artifact
             threshold = st.session_state.get(
-                "thresh_slider", 
-                float(threshold_info.get("threshold", 0.50))
+                "thresh_slider",
+                float(threshold_info.get("threshold", 0.50)),
             )
             decision = "Deny — Default Risk" if prob_default >= threshold else "Approve"
             is_deny = prob_default >= threshold
@@ -199,7 +200,7 @@ def page_dashboard():
     st.subheader("📊 Model Performance Overview")
     artifacts = _load_artifacts()
     if artifacts is None:
-        st.info("No trained model found. Open **Threshold Optimizer** to train the model.")
+        st.info("No trained model found. Open **Threshold Optimizer** in the sidebar.")
         return
 
     _, _, y_test, y_prob, _ = artifacts
@@ -233,11 +234,9 @@ def page_dashboard():
 
 def page_threshold_optimizer():
     st.subheader("🎯 Threshold Optimizer — Lender Rules Engine")
-    st.markdown("""
-    The model outputs a **probability of default** (0 to 1). A **threshold** converts this to a binary verdict.
-    """)
-
+    st.markdown("---")
     st.markdown("#### Step 1 — Model Status")
+
     artifacts = _load_artifacts()
 
     if artifacts is None:
@@ -250,7 +249,6 @@ def page_threshold_optimizer():
                 with st.spinner("Training..."):
                     auc, threshold_info = _do_train()
                 st.session_state["thresh_slider"] = float(threshold_info["threshold"])
-                st.success(f"✅ Training complete! AUC = {auc:.4f}")
                 st.rerun()
             except Exception as exc:
                 st.error(f"Training failed: {exc}")
@@ -260,18 +258,18 @@ def page_threshold_optimizer():
     auc = roc_auc_score(y_test, y_prob)
 
     col_a, col_b, col_retrain = st.columns([2, 1, 1])
-    col_a.success(f"✅ Model loaded — AUC = {auc:.4f}")
+    col_a.success(f"✅ Model loaded — ROC-AUC = **{auc:.4f}**")
     if col_retrain.button("🔄 Retrain"):
         auc, threshold_info = _do_train()
         st.session_state["thresh_slider"] = float(threshold_info["threshold"])
         st.rerun()
 
     from evaluation.thresholds import (
-        find_optimal_threshold, 
-        get_metrics_at_threshold, 
-        optimize_threshold_from_pr_curve
+        find_optimal_threshold,
+        get_metrics_at_threshold,
+        optimize_threshold_from_pr_curve,
     )
-    
+
     sweep_df = _sweep_thresholds(tuple(y_test.tolist()), tuple(y_prob.tolist()))
 
     st.markdown("---")
@@ -282,11 +280,10 @@ def page_threshold_optimizer():
         "Decision Threshold",
         min_value=0.01, max_value=0.99, step=0.01,
         value=float(st.session_state.get("thresh_slider", float(threshold_info.get("threshold", 0.50)))),
-        key="thresh_slider"
+        key="thresh_slider",
     )
 
     m = get_metrics_at_threshold(y_test, y_prob, threshold)
-    
     st.markdown(f"#### Step 3 — Live Metrics at **{threshold:.2f}**")
     cols = st.columns(5)
     cols[0].metric("Precision", f"{m['precision']:.3f}")
@@ -295,7 +292,7 @@ def page_threshold_optimizer():
     cols[3].metric("Accuracy", f"{m['accuracy']:.3f}")
     cols[4].metric("Approval Rate", f"{m['approval_rate']:.1%}")
 
-    # Confusion Matrix (Altair)
+    # Interactive Confusion Matrix
     cm = np.array([[m["tn"], m["fp"]], [m["fn"], m["tp"]]])
     cm_frame = pd.DataFrame([
         {"actual": "Paid", "predicted": "Approved", "count": int(cm[0, 0])},
@@ -312,7 +309,7 @@ def page_threshold_optimizer():
     )
     st.altair_chart(heatmap + labels, use_container_width=True)
 
-    # PR Optimizer Sliders
+    # Business Optimizer
     st.markdown("#### Precision-Recall Business Optimizer")
     pr_c1, pr_c2, pr_c3 = st.columns(3)
     min_p = pr_c1.slider("Min Precision", 0.0, 1.0, 0.60)
@@ -324,7 +321,7 @@ def page_threshold_optimizer():
         st.session_state["thresh_slider"] = float(pr_best["threshold"])
         st.rerun()
 
-    # Quick apply table
+    # Optimal Table
     OBJECTIVES = {"Maximize F1": "f1", "Maximize Precision": "precision", "Maximize Recall": "recall", "Balanced": "balanced", "Maximize Profit": "profit"}
     rows = []
     opt_results = {}
@@ -380,3 +377,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
