@@ -13,6 +13,7 @@ model = joblib.load("model.pkl")
 PRIMARY_COLOR = "#2E7D32"
 ACCENT_COLOR = "#5D4037"
 
+
 def main():
     st.set_page_config(page_title="EquiLend AI - Credit Scoring", layout="wide")
 
@@ -48,7 +49,7 @@ def main():
             with st.spinner("AI Model Calculating..."):
                 time.sleep(1)
 
-                # ✅ Age validation
+                # ✅ Fix 1: Age validation
                 if age < 18:
                     st.error("Applicant must be at least 18 years old.")
                     return
@@ -66,7 +67,7 @@ def main():
                     "employment_length": employment_val
                 }])
 
-                # ✅ ML prediction
+                # ✅ Fix 2 & 3: ML prediction
                 prediction = model.predict_proba(input_data)[0][1]
                 risk_level = "High" if prediction > 0.5 else "Low"
 
@@ -75,7 +76,7 @@ def main():
                 st.metric("Risk Probability", round(prediction, 2))
                 st.write(f"Recommended Decision: **{risk_level} Risk**")
 
-                # ✅ Save to MongoDB
+                # ✅ Fix 4: Save to MongoDB
                 insert_application({
                     "name": name,
                     "age": age,
@@ -104,6 +105,7 @@ def main():
             st.bar_chart(df["risk_level"].value_counts())
         else:
             st.warning("No applications found.")
+
 
 # Run
 if __name__ == '__main__':
